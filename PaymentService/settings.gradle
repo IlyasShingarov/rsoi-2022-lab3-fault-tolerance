@@ -1,0 +1,4 @@
+rootProject.name = 'PaymentService'
+include 'PaymentServiceApi'
+include 'PaymentServiceImpl'
+
