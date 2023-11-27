@@ -24,6 +24,6 @@ public interface CarClient {
     List<CarResponseDto> getCars(List<UUID> carUids);
 
     @PatchMapping("${carsapi.url.base}/{carId}")
-    ResponseEntity<?> changeAvailability(@PathVariable UUID carId);
+    ResponseEntity<?> changeAvailability(@PathVariable UUID carId, @RequestParam boolean availability);
 
 }

@@ -13,7 +13,7 @@ import java.util.UUID;
 public interface CarService {
     Page<CarResponseDto> getCars(boolean showAll, Pageable pageable);
 
-    void changeAvailability(UUID carId);
+    void changeAvailability(UUID carId, boolean availability);
 
     List<CarResponseDto> getCars(Set<UUID> carUids);
 

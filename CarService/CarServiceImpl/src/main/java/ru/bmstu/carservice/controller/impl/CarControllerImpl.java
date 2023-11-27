@@ -39,8 +39,8 @@ public class CarControllerImpl implements CarController {
     }
 
     @Override
-    public ResponseEntity<?> changeAvailability(UUID carId) {
-        carService.changeAvailability(carId);
+    public ResponseEntity<?> changeAvailability(UUID carId, boolean availability) {
+        carService.changeAvailability(carId, availability);
         return ResponseEntity.ok().build();
     }
 }
