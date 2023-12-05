@@ -14,6 +14,52 @@ jobs:
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
+      
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: '21'
+          distribution: 'oracle'
+          cache: 'gradle'
+      
+      - name: Validate Gradle wrapper
+        uses: gradle/wrapper-validation-action@ccb4328a959376b642e027874838f60f8e596de3
+      
+      - name: Setup Gradle
+        uses: gradle/gradle-build-action@v2
+
+      - name: Build CarService & API
+        run: |
+          chmod +x ./CarService/gradlew
+          cd CarService && ./gradlew :CarServiceApi:clean :CarServiceApi:publishToMavenLocal :CarServiceImpl:clean :CarServiceImpl:bootJar
+
+      - name: Build RentalService & API
+        run: |
+          chmod +x ./RentalService/gradlew
+          cd RentalService && ./gradlew :RentalServiceApi:clean :RentalServiceApi:publishToMavenLocal :RentalServiceImpl:clean :RentalServiceImpl:bootJar
+
+      - name: Build PaymentService & API
+        run: |
+          chmod +x ./PaymentService/gradlew
+          cd PaymentService && ./gradlew :PaymentServiceApi:clean :PaymentServiceApi:publishToMavenLocal :PaymentServiceImpl:clean :PaymentServiceImpl:bootJar
+
+      - name: Build GatewayService
+        run: |
+          chmod +x ./GatewayService/gradlew
+          cd GatewayService && ./gradlew :GatewayImpl:clean :GatewayImpl:bootJar
+
+
+      - name: Build images
+        timeout-minutes: 10
+        run: docker compose build
+
+      - name: Run containers
+        timeout-minutes: 5
+        run: |
+          docker compose up -d
+          ./scripts/wait-script.sh
+        env:
+          WAIT_PORTS: 8080/api/v1,8070/cars,8060/rental,8050/payment
 
       - uses: docker/setup-buildx-action@v2
 
@@ -37,23 +83,23 @@ jobs:
         timeout-minutes: 5
         run: ./scripts/test-script.sh
         env:
-          VARIANT: <variant>
-          SERVICE_NAME: <your service name>
-          PORT_NUMBER: <port number>
+          VARIANT: v3
+          SERVICE_NAME: payment
+          PORT_NUMBER: 8050
 
-      - uses: education/autograding@v1
-        id: autograder
-        continue-on-error: true
+            #- uses: education/autograding@v1
+            #id: autograder
+            #continue-on-error: true
 
-      - name: Github auto grader mark
-        uses: Romanow/google-sheet-autograder-marker@v1.0
-        with:
-          google_token: ${{secrets.GOOGLE_API_KEY}}
-          sheet_id: "1xkgjUX6Qmk7rdJG-QPOToav-HWWtthJjnShIKnw3oIY"
-          homework_number: 3
-          user_column: 'D'
-          column_offset: 'F'
-          mark: "'+"
+      #- name: Github auto grader mark
+      #  uses: Romanow/google-sheet-autograder-marker@v1.0
+      #  with:
+      #    google_token: ${{secrets.GOOGLE_API_KEY}}
+      #    sheet_id: "1xkgjUX6Qmk7rdJG-QPOToav-HWWtthJjnShIKnw3oIY"
+      #    homework_number: 3
+      #    user_column: 'D'
+      #    column_offset: 'F'
+      #    mark: "'+"
 
       - name: Stop containers
         if: always()
