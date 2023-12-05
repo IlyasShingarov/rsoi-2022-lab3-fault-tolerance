@@ -23,7 +23,7 @@ public class CarControllerImpl implements CarController {
 
     @Override
     public Page<CarResponseDto> getCars(boolean showAll, int page, int size) {
-        PageRequest pageRequest = PageRequest.of(page - 1, size);
+        PageRequest pageRequest = PageRequest.of(page, size);
         log.debug("Request for reading cars. showAll = {}. page request = {}", showAll, pageRequest);
         return carService.getCars(showAll, pageRequest);
     }
