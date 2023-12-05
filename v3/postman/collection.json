@@ -50,7 +50,7 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/api/v1/cars?page=1&size=10&showAll=false",
+							"raw": "{{baseUrl}}/api/v1/cars?page=0&size=10&showAll=false",
 							"host": [
 								"{{baseUrl}}"
 							],
@@ -82,7 +82,7 @@
 								"method": "GET",
 								"header": [],
 								"url": {
-									"raw": "{{baseUrl}}/api/v1/cars?page=1&size=10&showAll=true",
+									"raw": "{{baseUrl}}/api/v1/cars?page=0&size=10&showAll=true",
 									"host": [
 										"{{baseUrl}}"
 									],
@@ -94,7 +94,7 @@
 									"query": [
 										{
 											"key": "page",
-											"value": "1"
+											"value": "0"
 										},
 										{
 											"key": "size",
@@ -1074,7 +1074,7 @@
 								"method": "GET",
 								"header": [],
 								"url": {
-									"raw": "{{baseUrl}}/api/v1/cars?page=1&size=10&showAll=false",
+									"raw": "{{baseUrl}}/api/v1/cars?page=0&size=10&showAll=false",
 									"host": [
 										"{{baseUrl}}"
 									],
@@ -1086,7 +1086,7 @@
 									"query": [
 										{
 											"key": "page",
-											"value": "1"
+											"value": "0"
 										},
 										{
 											"key": "size",
