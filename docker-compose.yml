@@ -2,7 +2,7 @@ version: "3"
 services:
   postgres:
     image: library/postgres:13
-    container_name: postgres
+    container_name: postgres-3
     restart: on-failure
     environment:
       POSTGRES_USER: postgres
