@@ -15,6 +15,51 @@ services:
       - "5432:5432"
 
 # TODO добавить сервисы
+  gateway:
+    image: gateway
+    build: GatewayService/
+    ports:
+      - "8080:8080"
+    depends_on:
+      - cars
+      - rental
+      - payment
+
+  cars:
+    image: cars
+    build: CarService/
+    ports:
+      - "8070:8070"
+    environment:
+      DB_URL: "jdbc:postgresql://postgres:5432/cars"
+      DB_USERNAME: "program"
+      DB_PASSWORD: "test"
+    depends_on:
+      - postgres
+
+  payment:
+    image: payment
+    build: PaymentService/
+    ports:
+      - "8050:8050"
+    environment:
+      DB_URL: "jdbc:postgresql://postgres:5432/payments"
+      DB_USERNAME: "program"
+      DB_PASSWORD: "test"
+    depends_on:
+      - postgres
+
+  rental:
+    image: rental
+    build: RentalService/
+    ports:
+      - "8060:8060"
+    environment:
+      DB_URL: "jdbc:postgresql://postgres:5432/rentals"
+      DB_USERNAME: "program"
+      DB_PASSWORD: "test"
+    depends_on:
+      - postgres
 
 volumes:
   db-data:

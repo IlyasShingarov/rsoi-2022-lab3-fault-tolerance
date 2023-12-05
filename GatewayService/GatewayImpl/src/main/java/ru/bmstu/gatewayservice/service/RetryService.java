@@ -2,6 +2,8 @@ package ru.bmstu.gatewayservice.service;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 import ru.bmstu.gatewayservice.wrapper.RetryWrapper;
 
 import java.time.temporal.ChronoUnit;
@@ -13,6 +15,7 @@ import java.util.concurrent.LinkedBlockingDeque;
 import java.util.function.Supplier;
 
 @Slf4j
+@Service
 public class RetryService {
     public static final int SLEEP_TIME = 2000;
     public static final int CALL_TIMEOUT = 1000;
