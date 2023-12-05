@@ -20,7 +20,7 @@ public interface GatewayService {
 
     RentalCreateDto bookCar(String userName, CarRentDto carRentDto);
 
-    void finishRental(String username, UUID rentalUid);
+    boolean finishRental(String username, UUID rentalUid);
 
-    void cancelRental(String username, UUID rentalUid);
+    boolean cancelRental(String username, UUID rentalUid);
 }

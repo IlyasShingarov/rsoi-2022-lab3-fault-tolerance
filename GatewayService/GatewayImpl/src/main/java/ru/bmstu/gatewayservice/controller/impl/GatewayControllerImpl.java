@@ -2,7 +2,11 @@ package ru.bmstu.gatewayservice.controller.impl;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestController;
 import ru.bmstu.carservice.dto.CarResponseDto;
 import ru.bmstu.gatewayservice.controller.GatewayConroller;
@@ -11,9 +15,11 @@ import ru.bmstu.gatewayservice.dto.car.CarDto;
 import ru.bmstu.gatewayservice.dto.rental.RentalCreateDto;
 import ru.bmstu.gatewayservice.dto.rental.RentalDto;
 import ru.bmstu.gatewayservice.dto.wrapper.PageableWrapperDto;
+import ru.bmstu.gatewayservice.exception.ServiceUnavailableException;
 import ru.bmstu.gatewayservice.service.GatewayService;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Slf4j
@@ -69,5 +75,12 @@ public class GatewayControllerImpl implements GatewayConroller {
         gatewayService.cancelRental(username, rentalUid);
 
         return ResponseEntity.noContent().build();
+    }
+
+    @ExceptionHandler(ServiceUnavailableException.class)
+    public ResponseEntity<?> serviceUnavailable(RuntimeException e) {
+        MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
+        headers.put("Content-Type", List.of("application/json"));
+        return new ResponseEntity<>(Map.of("message", e.getMessage()), headers, HttpStatus.SERVICE_UNAVAILABLE);
     }
 }

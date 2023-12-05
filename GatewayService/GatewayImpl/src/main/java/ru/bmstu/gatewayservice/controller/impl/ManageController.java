@@ -1,11 +1,11 @@
 package ru.bmstu.gatewayservice.controller.impl;
 
 import org.springframework.http.ResponseEntity;
-import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
-@Controller
+@RestController
 @RequestMapping("/manage")
 public class ManageController {
     @GetMapping("/health")

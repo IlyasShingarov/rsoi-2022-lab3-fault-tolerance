@@ -1,14 +1,12 @@
 package ru.bmstu.gatewayservice.service;
 
-import feign.FeignException;
-import jakarta.persistence.EntityNotFoundException;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.modelmapper.ModelMapper;
 import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Service;
 import ru.bmstu.carservice.dto.CarResponseDto;
-import ru.bmstu.carservice.feign.CarClient;
 import ru.bmstu.gatewayservice.dto.CarRentDto;
 import ru.bmstu.gatewayservice.dto.car.BaseCarDto;
 import ru.bmstu.gatewayservice.dto.car.CarDto;
@@ -16,19 +14,18 @@ import ru.bmstu.gatewayservice.dto.payment.PaymentDto;
 import ru.bmstu.gatewayservice.dto.rental.RentalCreateDto;
 import ru.bmstu.gatewayservice.dto.rental.RentalDto;
 import ru.bmstu.gatewayservice.dto.wrapper.PageableWrapperDto;
+import ru.bmstu.gatewayservice.exception.InternalServiceException;
 import ru.bmstu.gatewayservice.exception.InvalidOperationException;
+import ru.bmstu.gatewayservice.exception.ServiceUnavailableException;
+import ru.bmstu.gatewayservice.wrapper.FallbackWrapper;
 import ru.bmstu.paymentserivce.dto.PaymentResponseDto;
-import ru.bmstu.paymentserivce.feign.PaymentClient;
 import ru.bmstu.rentalapi.dto.RentalRequestDto;
 import ru.bmstu.rentalapi.dto.RentalResponseDto;
-import ru.bmstu.rentalapi.feign.RentalClient;
 
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 import static java.time.temporal.ChronoUnit.DAYS;
 
@@ -36,23 +33,32 @@ import static java.time.temporal.ChronoUnit.DAYS;
 @Service
 @RequiredArgsConstructor
 public class GatewayServiceImpl implements GatewayService {
-    private final CarClient carClient;
-    private final RentalClient rentalClient;
-    private final PaymentClient paymentClient;
+
+    private final ExternalService externalService;
+    private final RetryService breaker;
     private final ModelMapper modelMapper;
+
+    @PostConstruct
+    void startCircuitBreaker() {
+        Thread thread = new Thread(() -> {
+            try {
+                breaker.resendRequests();
+            } catch (InterruptedException ignored) {
+            }
+        });
+
+        thread.start();
+        log.debug("Circuit breaker initialized");
+    }
 
     @Override
     public PageableWrapperDto<CarDto> getAllCars(boolean showAll, int page, int size) {
-        Page<CarResponseDto> carOutDtos = carClient.getCars(showAll, page, size);
-
-        log.info("Received {} entities from car service", carOutDtos.getTotalElements());
-
-        return mapToPageCollectionOutDto(carOutDtos, CarDto.class);
+        return buildPageCollectionOutDto(externalService.getCars(showAll, page, size));
     }
 
     @Override
     public List<RentalDto> getRental(String username) {
-        List<RentalResponseDto> rentals = rentalClient.getRentals(username).getBody();
+        List<RentalResponseDto> rentals = externalService.getRentals(username);
 
         List<UUID> paymentsUids = new LinkedList<>();
         List<UUID> carUids = new LinkedList<>();
@@ -61,13 +67,8 @@ public class GatewayServiceImpl implements GatewayService {
             carUids.add(rentalOutDto.getCarUid());
         });
 
-        Map<UUID, PaymentResponseDto> payments = paymentClient.getPayments(paymentsUids)
-                .stream()
-                .collect(Collectors.toMap(PaymentResponseDto::paymentUid, Function.identity()));
-
-        Map<UUID, CarResponseDto> cars = carClient.getCars(carUids)
-                .stream()
-                .collect(Collectors.toMap(CarResponseDto::carUid, Function.identity()));
+        Map<UUID, PaymentResponseDto> payments = externalService.getPayments(paymentsUids);
+        Map<UUID, CarResponseDto> cars = externalService.getCars(carUids);
 
         return rentals.stream()
                 .map(rentalOutDto -> buildOutDto(rentalOutDto, payments, cars))
@@ -76,68 +77,143 @@ public class GatewayServiceImpl implements GatewayService {
 
     @Override
     public RentalDto getRental(String username, UUID rentalUid) {
-        RentalResponseDto rental = rentalClient.getRental(rentalUid, username).getBody();
-        log.info("Get rental form rental service: {}", rental);
+        FallbackWrapper<RentalResponseDto> rental = externalService.getRental(username, rentalUid);
+        if (!rental.isValidResponse()) {
+            throw new InternalServiceException("Unable to get info from Rental service.");
+        }
 
-        CarResponseDto car = carClient.getCar(rental.getCarUid());
-        PaymentResponseDto payment = paymentClient.getPayment(rental.getPaymentUid());
+        CarResponseDto car = externalService.getCar(rental.getValue().getCarUid());
+        PaymentResponseDto payment = externalService.getPayment(rental.getValue().getPaymentUid());
 
-        RentalDto mappedRental = modelMapper.map(rental, RentalDto.class);
+        RentalDto mappedRental = modelMapper.map(rental.getValue(), RentalDto.class);
         mappedRental.setCar(modelMapper.map(car, BaseCarDto.class));
         mappedRental.setPayment(modelMapper.map(payment, PaymentDto.class));
+
+        log.debug("RentalDto: {}", mappedRental);
 
         return mappedRental;
     }
 
     @Override
     public RentalCreateDto bookCar(String userName, CarRentDto carRentDto) {
-        CarResponseDto car = carClient.getCar(carRentDto.getCarUid());
+        CarResponseDto car = externalService.getCar(carRentDto.getCarUid());
 
         if (!car.available()) {
             log.error("Trying to book not available car {}", car.carUid());
             throw new InvalidOperationException("Car %s is not available".formatted(car.carUid()));
         }
 
-        changeCarAvailability(carRentDto.getCarUid());
-        PaymentResponseDto payment = createPayment(carRentDto, car.price());
-        RentalResponseDto rental = createRental(userName, carRentDto, payment);
+        changeCarAvailabilitySafety(car.carUid(), false);
 
-        RentalCreateDto rentalCreationOutDto = modelMapper.map(rental, RentalCreateDto.class);
-        rentalCreationOutDto.setPayment(modelMapper.map(payment, PaymentDto.class));
+        FallbackWrapper<PaymentResponseDto> payment = createPayment(carRentDto, car.price());
+        if (!payment.isValidResponse()) {
+            log.error("Unable to create payment for user [{}] order {}. Rollback changes", userName, carRentDto);
+            changeCarAvailabilitySafety(car.carUid(), true);
+            throw new ServiceUnavailableException("Payment Service unavailable");
+        }
+
+        FallbackWrapper<RentalResponseDto> rental = createRental(userName, carRentDto, payment.getValue());
+        if (!rental.isValidResponse()) {
+            log.error("Unable to create rental for user [{}] order [{}]. Rollback changes", userName, carRentDto);
+            changeCarAvailabilitySafety(car.carUid(), true);
+            externalService.cancelPayment(payment.getValue().paymentUid());
+            throw new ServiceUnavailableException("Rental Service unavailable");
+        }
+
+        RentalCreateDto rentalCreationOutDto = modelMapper.map(rental.getValue(), RentalCreateDto.class);
+        rentalCreationOutDto.setPayment(modelMapper.map(payment.getValue(), PaymentDto.class));
         rentalCreationOutDto.setCarUid(carRentDto.getCarUid());
+
+        log.debug("RentalDto after booking car {}", rentalCreationOutDto);
 
         return rentalCreationOutDto;
     }
 
-    private RentalResponseDto createRental(String username, CarRentDto carRentDto, PaymentResponseDto payment) {
+    private FallbackWrapper<PaymentResponseDto> createPayment(CarRentDto carBookDto, int carRentalPrice) {
+        int amountRentalDays = (int) calculateAmountRentalDays(carBookDto);
+        int totalPrice = amountRentalDays * carRentalPrice;
+
+        return externalService.createPayment(totalPrice);
+    }
+
+    private FallbackWrapper<RentalResponseDto> createRental(String username, CarRentDto carRentDto, PaymentResponseDto payment) {
         RentalRequestDto rentalInDto = new RentalRequestDto(
                 carRentDto.getCarUid(), payment.paymentUid(), carRentDto.getDateFrom(), carRentDto.getDateTo());
 
-        return rentalClient.createRental(username, rentalInDto);
+        return externalService.createRental(username, rentalInDto);
     }
 
     @Override
-    public void finishRental(String username, UUID rentalUid) {
-        try {
-            rentalClient.finishRental(rentalUid, username);
-        } catch (FeignException.NotFound e) {
-            log.info("Trying to finish non-existing rental: username = {}, rentalUid = {}", username, rentalUid);
+    public boolean finishRental(String username, UUID rentalUid) {
+        FallbackWrapper<RentalResponseDto> rental = externalService.getRental(username, rentalUid);
+        if (rental.isValidResponse()) {
+            UUID carUid = rental.getValue().getCarUid();
+            changeCarAvailabilitySafety(carUid, true);
 
-            throw new EntityNotFoundException(e.getMessage());
+            if (!externalService.finishRental(rentalUid, username)) {
+                log.error("Unable to finish rental [{}] of user [{}]. Request will be resend", rentalUid, username);
+                breaker.addRequest(buildHash(username, rentalUid),
+                        () -> externalService.finishRental(rentalUid, username));
+            }
+        } else {
+            log.error("Unable to get rental [{}] of user [{}] from rental service. Request will be resend",
+                    rentalUid, username);
+            breaker.addRequest(buildHash(username, rentalUid),
+                    () -> this.finishRental(username, rentalUid));
+            return false;
+        }
+
+        return true;
+    }
+
+    private void changeCarAvailabilitySafety(UUID carUid, boolean availability) {
+        boolean isChanged = externalService.changeCarAvailability(carUid, availability);
+
+        if (!isChanged) {
+            log.error("Unable to change car [{}] availability to [{}]. Request will be resend",
+                    carUid, availability);
+            breaker.addRequest(buildHash(carUid, availability),
+                    () -> externalService.changeCarAvailability(carUid, availability));
         }
     }
 
-    private PaymentResponseDto createPayment(CarRentDto carRentDto, int carRentalPrice) {
-        int amountRentalDays = (int) calculateAmountRentalDays(carRentDto);
-        int totalPrice = amountRentalDays * carRentalPrice;
+    private Integer buildHash(String username, UUID rentalUid) {
+        return (username + rentalUid).hashCode();
+    }
 
-        return paymentClient.createPayment(totalPrice);
+    private Integer buildHash(UUID carUid, boolean availability) {
+        return (carUid.toString() + availability).hashCode();
+    }
+
+    @Override
+    public boolean cancelRental(String username, UUID rentalUid) {
+        FallbackWrapper<RentalResponseDto> rental = externalService.getRental(username, rentalUid);
+        if (rental.isValidResponse()) {
+            changeCarAvailabilitySafety(rental.getValue().getCarUid(), true);
+
+            boolean isRentalCancelled = externalService.cancelRental(username, rentalUid);
+            if (!isRentalCancelled) {
+                breaker.addRequest(buildHash(username, rentalUid),
+                        () -> externalService.cancelRental(username, rentalUid));
+            }
+
+            boolean isPaymentCancelled = externalService.cancelPayment(rental.getValue().getPaymentUid());
+            if (!isPaymentCancelled) {
+                breaker.addRequest(buildHash(username, rentalUid),
+                        () -> externalService.cancelPayment(rental.getValue().getPaymentUid()));
+            }
+
+        } else {
+            breaker.addRequest(buildHash(username, rentalUid),
+                    () -> this.cancelRental(username, rentalUid));
+            return false;
+        }
+
+        return true;
     }
 
     private long calculateAmountRentalDays(CarRentDto carRentDto) {
-        long totalRentalDays =
-
-        DAYS.between(carRentDto.getDateFrom(), carRentDto.getDateTo());
+        long totalRentalDays = DAYS.between(carRentDto.getDateFrom(), carRentDto.getDateTo());
 
         if (totalRentalDays < 0) {
             log.error("Trying to create rental with invalid dates DateFrom {}, DateTo {}",
@@ -147,30 +223,6 @@ public class GatewayServiceImpl implements GatewayService {
         }
 
         return totalRentalDays;
-    }
-
-    @Override
-    public void cancelRental(String username, UUID rentalUid) {
-        try {
-            RentalResponseDto rental = rentalClient.getRental(rentalUid, username).getBody();
-
-            rentalClient.cancelRental(rentalUid, username);
-            paymentClient.cancelPayment(rental.getPaymentUid());
-            carClient.changeAvailability(rental.getCarUid());
-        } catch (FeignException.NotFound e) {
-            log.info("Trying to cancel non-existing rental: username = {}, rentalUid = {}", username, rentalUid);
-
-            throw new EntityNotFoundException(e.getMessage());
-        }
-    }
-
-    private void changeCarAvailability(UUID carId) {
-        try {
-            carClient.changeAvailability(carId);
-        } catch (FeignException.NotFound e) {
-            log.info("Trying to change availability for non existing car {}", carId);
-            throw new EntityNotFoundException("There is no car with id = %s".formatted(carId));
-        }
     }
 
     private RentalDto buildOutDto(RentalResponseDto rentalOutDto, Map<UUID, PaymentResponseDto> payments, Map<UUID, CarResponseDto> cars) {
@@ -186,13 +238,6 @@ public class GatewayServiceImpl implements GatewayService {
         rental.setCar(carDto);
 
         return rental;
-    }
-
-
-    private <T> PageableWrapperDto<T> mapToPageCollectionOutDto(Page<CarResponseDto> page, Class<T> destinationClass) {
-        Page<T> mappedPage = page.map(car -> modelMapper.map(car, destinationClass));
-
-        return buildPageCollectionOutDto(mappedPage);
     }
 
     private <T> PageableWrapperDto<T> buildPageCollectionOutDto(Page<T> page) {
