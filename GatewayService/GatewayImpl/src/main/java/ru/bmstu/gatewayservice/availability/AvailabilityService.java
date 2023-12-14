@@ -52,7 +52,7 @@ public class AvailabilityService {
     private final Map<String, ServiceState> retryMap = new HashMap<>(Map.of(
             "cars", new ServiceState(0, ServiceStatus.CLOSED),
             "rental", new ServiceState(0, ServiceStatus.CLOSED),
-            "payments", new ServiceState(0, ServiceStatus.CLOSED)
+            "payment", new ServiceState(0, ServiceStatus.CLOSED)
     ));
 
 
