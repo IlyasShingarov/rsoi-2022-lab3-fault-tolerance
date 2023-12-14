@@ -1,6 +1,17 @@
 server:
   port: 8080
 
+breaker:
+  threshold: 3
+
+
+manage:
+  urls:
+    cars: "http://cars:8070/manage/health"
+#    cars: "http://localhost:8070/manage/health"
+    rental: "http://rental:8060/manage/health"
+    payment: "http://payment:8050/manage/health"
+
 
 services:
   cars.url: "/api/v1/cars"

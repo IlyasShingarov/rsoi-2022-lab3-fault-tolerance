@@ -1,9 +1,11 @@
 package ru.bmstu.gatewayservice.service;
 
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.stereotype.Service;
+import ru.bmstu.gatewayservice.availability.AvailabilityService;
 import ru.bmstu.gatewayservice.wrapper.RetryWrapper;
 
 import java.time.temporal.ChronoUnit;
@@ -16,19 +18,21 @@ import java.util.function.Supplier;
 
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class RetryService {
     public static final int SLEEP_TIME = 2000;
     public static final int CALL_TIMEOUT = 1000;
 
+    private final AvailabilityService availabilityService;
     private final Queue<RetryWrapper> requests = new LinkedBlockingDeque<>();
     private final Set<Integer> currentRequestHashes = new HashSet<>();
 
-    public void addRequest(Integer hash, Supplier<Boolean> runnable) {
+    public void addRequest(String serviceName, Integer hash, Supplier<Boolean> runnable) {
         int fullHash = buildFullHash(hash, runnable);
 
         if (!currentRequestHashes.contains(fullHash)) {
             currentRequestHashes.add(fullHash);
-            RetryWrapper request = new RetryWrapper(runnable, fullHash);
+            RetryWrapper request = new RetryWrapper(runnable, fullHash, serviceName);
 
             requests.add(request);
             log.debug("Added new request {}", request.getFullHash());
@@ -61,7 +65,8 @@ public class RetryService {
         requests.poll();
 
         if (!isTimeout(request, currentTime)) {
-            if (lastCall == null || isNeedCall(lastCall, currentTime)) {
+            boolean serviceAvailable = availabilityService.checkAvailability(request.getServiceName());
+            if (serviceAvailable && lastCall == null || isNeedCall(lastCall, currentTime)) {
                 boolean isValidRequest = request.getRunnable().get();
                 request.setLastCall(currentTime);
 

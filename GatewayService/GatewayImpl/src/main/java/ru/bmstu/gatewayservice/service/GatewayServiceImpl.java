@@ -7,6 +7,7 @@ import org.modelmapper.ModelMapper;
 import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Service;
 import ru.bmstu.carservice.dto.CarResponseDto;
+import ru.bmstu.gatewayservice.availability.AvailabilityService;
 import ru.bmstu.gatewayservice.dto.CarRentDto;
 import ru.bmstu.gatewayservice.dto.car.BaseCarDto;
 import ru.bmstu.gatewayservice.dto.car.CarDto;
@@ -37,6 +38,7 @@ public class GatewayServiceImpl implements GatewayService {
     private final ExternalService externalService;
     private final RetryService breaker;
     private final ModelMapper modelMapper;
+    private final AvailabilityService availabilityService;
 
     @PostConstruct
     void startCircuitBreaker() {
@@ -145,20 +147,23 @@ public class GatewayServiceImpl implements GatewayService {
 
     @Override
     public boolean finishRental(String username, UUID rentalUid) {
-        FallbackWrapper<RentalResponseDto> rental = externalService.getRental(username, rentalUid);
+        boolean isAvailable = availabilityService.checkAvailability("rental");
+        FallbackWrapper<RentalResponseDto> rental = isAvailable ? externalService.getRental(username, rentalUid)
+                : new FallbackWrapper<>(null, false);
+
         if (rental.isValidResponse()) {
             UUID carUid = rental.getValue().getCarUid();
             changeCarAvailabilitySafety(carUid, true);
 
             if (!externalService.finishRental(rentalUid, username)) {
                 log.error("Unable to finish rental [{}] of user [{}]. Request will be resend", rentalUid, username);
-                breaker.addRequest(buildHash(username, rentalUid),
+                breaker.addRequest("rental", buildHash(username, rentalUid),
                         () -> externalService.finishRental(rentalUid, username));
             }
         } else {
             log.error("Unable to get rental [{}] of user [{}] from rental service. Request will be resend",
                     rentalUid, username);
-            breaker.addRequest(buildHash(username, rentalUid),
+            breaker.addRequest("rental", buildHash(username, rentalUid),
                     () -> this.finishRental(username, rentalUid));
             return false;
         }
@@ -167,13 +172,19 @@ public class GatewayServiceImpl implements GatewayService {
     }
 
     private void changeCarAvailabilitySafety(UUID carUid, boolean availability) {
-        boolean isChanged = externalService.changeCarAvailability(carUid, availability);
+        boolean isChanged = false;
+        if (availabilityService.checkAvailability("cars")) {
+            isChanged = externalService.changeCarAvailability(carUid, availability);
+        }
 
         if (!isChanged) {
             log.error("Unable to change car [{}] availability to [{}]. Request will be resend",
                     carUid, availability);
-            breaker.addRequest(buildHash(carUid, availability),
+            availabilityService.updateErrorCount("cars");
+            breaker.addRequest("cars", buildHash(carUid, availability),
                     () -> externalService.changeCarAvailability(carUid, availability));
+        } else {
+            availabilityService.setClosed("cars");
         }
     }
 
@@ -187,24 +198,29 @@ public class GatewayServiceImpl implements GatewayService {
 
     @Override
     public boolean cancelRental(String username, UUID rentalUid) {
-        FallbackWrapper<RentalResponseDto> rental = externalService.getRental(username, rentalUid);
+        boolean isRentalAvailable = availabilityService.checkAvailability("rental");
+
+        FallbackWrapper<RentalResponseDto> rental = isRentalAvailable ? externalService.getRental(username, rentalUid)
+                : new FallbackWrapper<>(null, false);
+
         if (rental.isValidResponse()) {
             changeCarAvailabilitySafety(rental.getValue().getCarUid(), true);
 
-            boolean isRentalCancelled = externalService.cancelRental(username, rentalUid);
+            boolean isRentalCancelled = isRentalAvailable && externalService.cancelRental(username, rentalUid);
             if (!isRentalCancelled) {
-                breaker.addRequest(buildHash(username, rentalUid),
+                breaker.addRequest("rental", buildHash(username, rentalUid),
                         () -> externalService.cancelRental(username, rentalUid));
             }
 
-            boolean isPaymentCancelled = externalService.cancelPayment(rental.getValue().getPaymentUid());
+            boolean isPaymentAvaliable = availabilityService.checkAvailability("payment");
+            boolean isPaymentCancelled = isPaymentAvaliable &&
+                    externalService.cancelPayment(rental.getValue().getPaymentUid());
             if (!isPaymentCancelled) {
-                breaker.addRequest(buildHash(username, rentalUid),
+                breaker.addRequest("payment", buildHash(username, rentalUid),
                         () -> externalService.cancelPayment(rental.getValue().getPaymentUid()));
             }
-
         } else {
-            breaker.addRequest(buildHash(username, rentalUid),
+            breaker.addRequest("rental", buildHash(username, rentalUid),
                     () -> this.cancelRental(username, rentalUid));
             return false;
         }
